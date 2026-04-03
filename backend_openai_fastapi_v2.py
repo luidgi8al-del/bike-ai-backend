@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 import os
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Quer
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from openai import OpenAI
