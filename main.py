@@ -5,11 +5,9 @@ import os
 
 app = FastAPI()
 
-
 @app.get("/")
 def root():
     return {"message": "Backend Alex fonctionne"}
-
 
 @app.get("/strava/callback")
 def strava_callback(
@@ -18,15 +16,10 @@ def strava_callback(
     error: str = Query(None)
 ):
     if error:
-        return JSONResponse(
-            {"status": "error", "message": error},
-            status_code=400
-        )
+        return JSONResponse({"status": "error", "message": error}, status_code=400)
 
     if not code:
-        return JSONResponse(
-            {"status": "error", "message": "code manquant"}
-        )
+        return JSONResponse({"status": "error", "message": "code manquant"})
 
     strava_client_id = os.getenv("STRAVA_CLIENT_ID")
     strava_client_secret = os.getenv("STRAVA_CLIENT_SECRET")
