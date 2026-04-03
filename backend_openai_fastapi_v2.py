@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import requests
-from fastapi.responses import JSONResponse
 import os
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+import requests
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse, RedirectResponse
 from openai import OpenAI
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -319,6 +319,20 @@ def strava_callback(
             "grant_type": "authorization_code"
         },
         timeout=20
+   )
+
+    token_data = response.json()
+
+    access_token = token_data.get("access_token")
+    refresh_token = token_data.get("refresh_token")
+    expires_at = token_data.get("expires_at")
+
+    redirect_url = (
+        f"alexapp://strava-callback"
+        f"?status=success"
+        f"&access_token={access_token}"
+        f"&refresh_token={refresh_token}"
+        f"&expires_at={expires_at}"
     )
 
-    return JSONResponse(response.json())
+    return RedirectResponse(url=redirect_url)
