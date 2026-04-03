@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import requests
+from fastapi.responses import JSONResponse
 import os
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Quer
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -280,3 +282,42 @@ def health() -> Dict[str, Any]:
 @app.post("/coach/recommendation", response_model=CoachResponse)
 def coach_recommendation(req: CoachRequest) -> CoachResponse:
     return openai_recommendation(req)
+
+@app.get("/strava/callback")
+def strava_callback(
+    code: str = Query(None),
+    state: str = Query(None),
+    error: str = Query(None)
+):
+    if error:
+        return JSONResponse(
+            {"status": "error", "message": error},
+            status_code=400
+        )
+
+    if not code:
+        return JSONResponse(
+            {"status": "error", "message": "code manquant"}
+        )
+
+    strava_client_id = os.getenv("STRAVA_CLIENT_ID")
+    strava_client_secret = os.getenv("STRAVA_CLIENT_SECRET")
+
+    if not strava_client_id or not strava_client_secret:
+        return JSONResponse(
+            {"status": "error", "message": "variables Strava manquantes côté backend"},
+            status_code=500
+        )
+
+    response = requests.post(
+        "https://www.strava.com/oauth/token",
+        data={
+            "client_id": strava_client_id,
+            "client_secret": strava_client_secret,
+            "code": code,
+            "grant_type": "authorization_code"
+        },
+        timeout=20
+    )
+
+    return JSONResponse(response.json())
