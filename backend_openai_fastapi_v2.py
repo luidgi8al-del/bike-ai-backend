@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 if not OPENAI_API_KEY:
     raise RuntimeError(
@@ -23,8 +23,12 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-app = FastAPI(title="Coach Cyclisme IA V2", version="2.0.0")
+app = FastAPI(title="Coach Cyclisme IA V2", version="2.1.0")
 
+
+# ─────────────────────────────────────────────
+#  Modèles communs
+# ─────────────────────────────────────────────
 
 class ProfilePayload(BaseModel):
     sport: str = "cyclisme"
@@ -34,6 +38,7 @@ class ProfilePayload(BaseModel):
     watts_5min: Optional[int] = None
     fc_max: Optional[int] = None
     fc_repos: Optional[int] = None
+    fc_repos_profil: Optional[int] = None
     poids_kg: Optional[float] = None
 
 
@@ -56,15 +61,21 @@ class DayPayload(BaseModel):
     ctl: Optional[float] = None
     atl: Optional[float] = None
     tsb: Optional[float] = None
+    ratio_fatigue_forme: Optional[float] = None
     fatigue_subjective: Optional[str] = None
     envie_du_jour: Optional[str] = None
     temps_disponible_min: Optional[int] = None
-    hrv: Optional[str] = None
-    fc_repos_tendance: Optional[str] = None
+    hrv: Optional[Any] = None
+    fc_repos_tendance: Optional[Any] = None
     jours_intenses_recents: Optional[int] = None
     activites_du_jour: List[ActivityItem] = Field(default_factory=list)
     historique_recent: List[str] = Field(default_factory=list)
+    sante: Optional[Dict[str, Any]] = None
 
+
+# ─────────────────────────────────────────────
+#  Modèles /coach/recommendation
+# ─────────────────────────────────────────────
 
 class CoachRequest(BaseModel):
     message: str
@@ -90,6 +101,27 @@ class CoachResponse(BaseModel):
     tags: List[str]
     moteur: str = "openai"
 
+
+# ─────────────────────────────────────────────
+#  Modèles /coach/dashboard
+# ─────────────────────────────────────────────
+
+class DashboardRequest(BaseModel):
+    mode: str = "dashboard_analysis"
+    profile: ProfilePayload
+    day_data: DayPayload
+
+
+class DashboardResponse(BaseModel):
+    titre: str
+    analyse: str
+    niveau_alerte: Literal["vert", "bleu", "orange", "rouge"]
+    conseil_court: str
+
+
+# ─────────────────────────────────────────────
+#  Helpers
+# ─────────────────────────────────────────────
 
 def build_context_summary(req: CoachRequest) -> Dict[str, Any]:
     p = req.profile
@@ -120,6 +152,28 @@ def build_context_summary(req: CoachRequest) -> Dict[str, Any]:
         "specificity": specificity,
     }
 
+
+def build_health_summary(sante: Optional[Dict[str, Any]]) -> str:
+    if not sante:
+        return "Aucune donnée santé disponible."
+    parts = []
+    fc = sante.get("fc_repos_mesure")
+    if fc:
+        parts.append(f"FC repos mesurée ce matin : {fc} bpm")
+    sommeil_h = sante.get("sommeil_heures")
+    if sommeil_h:
+        parts.append(f"Durée de sommeil dernière nuit : {sommeil_h:.1f}h")
+    phases = sante.get("sommeil_phases")
+    if phases and isinstance(phases, dict):
+        phases_str = ", ".join(f"{k} {v} min" for k, v in phases.items() if v)
+        if phases_str:
+            parts.append(f"Phases de sommeil : {phases_str}")
+    return ". ".join(parts) + "." if parts else "Aucune donnée santé disponible."
+
+
+# ─────────────────────────────────────────────
+#  Schémas JSON stricts
+# ─────────────────────────────────────────────
 
 RESPONSE_JSON_SCHEMA: Dict[str, Any] = {
     "name": "coach_response",
@@ -152,77 +206,78 @@ RESPONSE_JSON_SCHEMA: Dict[str, Any] = {
     "strict": True
 }
 
+DASHBOARD_JSON_SCHEMA: Dict[str, Any] = {
+    "name": "dashboard_response",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "titre": {"type": "string"},
+            "analyse": {"type": "string"},
+            "niveau_alerte": {"type": "string", "enum": ["vert", "bleu", "orange", "rouge"]},
+            "conseil_court": {"type": "string"}
+        },
+        "required": ["titre", "analyse", "niveau_alerte", "conseil_court"]
+    },
+    "strict": True
+}
+
+
+# ─────────────────────────────────────────────
+#  Prompts système
+# ─────────────────────────────────────────────
 
 SYSTEM_PROMPT = """
 Tu es un coach cycliste expert premium, précis, prudent et orienté performance.
 Tu réponds toujours en français.
 Tu analyses le contexte à partir du profil, de la charge, de la fatigue, du temps disponible, de la discipline et du message libre.
 
-Références méthodologiques à utiliser comme cadre de raisonnement :
-- Coggan : logique FTP, PMA/VO2, zones de puissance, charge aiguë/chronique, articulation CTL / ATL / TSB.
+Références méthodologiques :
+- Coggan : logique FTP, PMA/VO2, zones de puissance, charge aiguë/chronique, CTL / ATL / TSB.
 - Rønnestad : formats d'intervalles courts/fragmentés VO2max pertinents selon fraîcheur et niveau.
 - Spécificité cyclisme : différencier route, VTT, XCO, home trainer.
 - Toujours adapter la séance au niveau de fatigue et au temps disponible.
-- Tu peux proposer une séance de musculation adapté si cela provient du message ou si tu remarques que c'est pertinent.
 
 Règles absolues :
 1. Ne jamais inventer des données absentes.
-2. S'il y a fatigue élevée, TSB très négatif, plusieurs jours intenses ou signaux de récupération insuffisante,
-   réduire le volume ou proposer une récupération / endurance facile / activation légère.
-3. Si l'utilisateur demande une séance intense mais que l'état du jour n'est pas favorable, expliquer pourquoi et proposer une alternative.
-4. Pour VTT : intégrer si pertinent relances, PMA, VO2max, changements de rythme, départs explosifs.
-5. Pour route : intégrer si pertinent endurance, tempo, seuil, VO2max, sprint, sortie longue.
-6. Privilégier des prescriptions exploitables : durée, logique d'effort, récupération, repères d'intensité.
-7. Si FTP disponible, utiliser des plages en % FTP. Sinon, utiliser RPE et sensations.
-8. Le format de sortie doit être strictement le JSON demandé.
-9. Toujours proposer une alternative plus facile.
-10. La séance doit être réaliste pour le temps disponible.
+2. S'il y a fatigue élevée, TSB très négatif, plusieurs jours intenses ou récupération insuffisante : réduire le volume.
+3. Si l'utilisateur veut une séance intense mais que l'état du jour n'est pas favorable : expliquer et proposer une alternative.
+4. Pour VTT : relances, PMA, VO2max, changements de rythme, départs explosifs.
+5. Pour route : endurance, tempo, seuil, VO2max, sprint, sortie longue.
+6. Prescriptions exploitables : durée, logique d'effort, récupération, repères d'intensité.
+7. Si FTP disponible, utiliser des plages en % FTP. Sinon, RPE et sensations.
+8. Toujours proposer une alternative plus facile.
+9. La séance doit être réaliste pour le temps disponible.
 
-Types de séances que tu peux recommander selon le contexte :
-- récupération
-- endurance
-- endurance active
-- tempo
-- seuil / FTP
-- VO2max / PMA
-- fractionné court
-- sprint / anaérobie
-- force en côte
-- activation pré-course
-- repos complet
-
-Cas fréquents à bien comprendre :
-- "je veux travailler la VO2max"
-- "je suis fatigué"
-- "j'ai 40 min"
-- "je prépare un XCO"
-- "je veux une séance intense"
-- "je veux récupérer"
-- "je veux du fractionné court"
-- "j'ai fait une grosse séance hier"
-- "je roule sur route"
-- "je suis en VTT"
-
-Repères d'analyse :
+Repères TSB :
 - TSB <= -15 : alerte fatigue forte
-- TSB entre -7 et -14 : fatigue modérée à élevée
-- TSB entre -6 et +4 : zone exploitable selon le reste du contexte
+- TSB -7 à -14 : fatigue modérée
+- TSB -6 à +4 : zone exploitable
 - TSB > +5 : fraîcheur intéressante
-- charge récente + fatigue subjective + jours intenses récents doivent primer sur l'envie de faire très dur
-
-Exemples de logiques attendues :
-- VO2max route frais : 5 x 3 min à 115-120% FTP, récup 3 min
-- VO2max type Rønnestad : 3 séries de 13 x (30"/15") si le profil et la fraîcheur le permettent
-- vtt frais : 6 x 2 min PMA + départs explosifs / relances
-- fatigue modérée : 4 x 2 min au lieu de 6 x 2 min
-- fatigue élevée : endurance facile ou récupération active
-- temps très court : séance dense et simple
-- route seuil : 2 à 3 blocs longs au seuil selon fraîcheur
-
-Ne fais pas de paragraphes inutiles.
-Sois concret, lisible, précis.
 """
 
+DASHBOARD_SYSTEM_PROMPT = """
+Tu es un coach cycliste expert. Tu analyses l'état de forme du jour d'un athlète cycliste
+et tu fournis une analyse courte, personnalisée et actionnable en français.
+
+Tu disposes des données : charge d'entraînement (CTL, ATL, TSB), historique récent des séances,
+profil (FTP, FC max), et données santé (FC repos mesurée, durée et phases de sommeil).
+
+Règles :
+1. Synthétise TOUTES les données disponibles — ne te limite pas au TSB.
+2. FC repos mesurée : si anormalement élevée par rapport au profil, c'est un signe de fatigue ou d'infection.
+3. Sommeil court (< 6h) = signal négatif fort. Sommeil long avec bon profond/REM = signal positif.
+4. Sois concis et utile. "analyse" = 2 à 4 phrases maximum.
+5. "conseil_court" = une action concrète en 1 phrase.
+6. "niveau_alerte" : vert = super forme, bleu = équilibre, orange = fatigue modérée, rouge = fatigue forte.
+7. Ne jamais inventer de données. Si absente, ignore-la.
+8. Réponds strictement en JSON selon le schéma.
+"""
+
+
+# ─────────────────────────────────────────────
+#  Logique OpenAI
+# ─────────────────────────────────────────────
 
 def openai_recommendation(req: CoachRequest) -> CoachResponse:
     context_summary = build_context_summary(req)
@@ -271,6 +326,72 @@ def openai_recommendation(req: CoachRequest) -> CoachResponse:
         raise HTTPException(status_code=500, detail=f"Réponse OpenAI incomplète : {exc}") from exc
 
 
+def openai_dashboard(req: DashboardRequest) -> DashboardResponse:
+    d = req.day_data
+    p = req.profile
+    health_summary = build_health_summary(d.sante)
+
+    user_payload = {
+        "profil": {
+            "ftp": p.ftp or p.watts_5min,
+            "fc_max": p.fc_max,
+            "fc_repos_reference": p.fc_repos or p.fc_repos_profil,
+            "poids_kg": p.poids_kg,
+        },
+        "charge_entrainement": {
+            "ctl": d.ctl,
+            "atl": d.atl,
+            "tsb": d.tsb,
+            "charge_7j": d.charge_7j,
+            "charge_28j": d.charge_28j,
+            "ratio_fatigue_forme": d.ratio_fatigue_forme,
+            "jours_intenses_recents": d.jours_intenses_recents,
+        },
+        "donnees_sante": health_summary,
+        "historique_recent": d.historique_recent[:5],
+    }
+
+    response = client.responses.create(
+        model=OPENAI_MODEL,
+        input=[
+            {"role": "system", "content": DASHBOARD_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Analyse l'état de forme de cet athlète aujourd'hui et réponds en JSON strict.\n\n"
+                    + json.dumps(user_payload, ensure_ascii=False, indent=2)
+                ),
+            },
+        ],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": DASHBOARD_JSON_SCHEMA["name"],
+                "schema": DASHBOARD_JSON_SCHEMA["schema"],
+                "strict": DASHBOARD_JSON_SCHEMA["strict"],
+            }
+        },
+    )
+
+    raw_text = getattr(response, "output_text", None)
+    if not raw_text:
+        raise HTTPException(status_code=500, detail="Réponse OpenAI dashboard vide.")
+
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"JSON dashboard invalide : {exc}") from exc
+
+    try:
+        return DashboardResponse(**data)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Réponse dashboard incomplète : {exc}") from exc
+
+
+# ─────────────────────────────────────────────
+#  Routes
+# ─────────────────────────────────────────────
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {
@@ -284,6 +405,16 @@ def health() -> Dict[str, Any]:
 def coach_recommendation(req: CoachRequest) -> CoachResponse:
     return openai_recommendation(req)
 
+
+@app.post("/coach/dashboard", response_model=DashboardResponse)
+def coach_dashboard(req: DashboardRequest) -> DashboardResponse:
+    """
+    Analyse de forme du jour pour le tableau de bord.
+    Prend en compte CTL/ATL/TSB, FC repos mesurée, sommeil (durée + phases), historique récent.
+    """
+    return openai_dashboard(req)
+
+
 @app.get("/strava/callback")
 def strava_callback(
     code: str = Query(None),
@@ -291,15 +422,10 @@ def strava_callback(
     error: str = Query(None)
 ):
     if error:
-        return JSONResponse(
-            {"status": "error", "message": error},
-            status_code=400
-        )
+        return JSONResponse({"status": "error", "message": error}, status_code=400)
 
     if not code:
-        return JSONResponse(
-            {"status": "error", "message": "code manquant"}
-        )
+        return JSONResponse({"status": "error", "message": "code manquant"})
 
     strava_client_id = os.getenv("STRAVA_CLIENT_ID")
     strava_client_secret = os.getenv("STRAVA_CLIENT_SECRET")
@@ -319,20 +445,59 @@ def strava_callback(
             "grant_type": "authorization_code"
         },
         timeout=20
-   )
+    )
 
     token_data = response.json()
-
-    access_token = token_data.get("access_token")
-    refresh_token = token_data.get("refresh_token")
-    expires_at = token_data.get("expires_at")
 
     redirect_url = (
         f"alexapp://strava-callback"
         f"?status=success"
-        f"&access_token={access_token}"
-        f"&refresh_token={refresh_token}"
-        f"&expires_at={expires_at}"
+        f"&access_token={token_data.get('access_token')}"
+        f"&refresh_token={token_data.get('refresh_token')}"
+        f"&expires_at={token_data.get('expires_at')}"
     )
 
     return RedirectResponse(url=redirect_url)
+
+
+@app.post("/strava/refresh")
+def strava_refresh(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Rafraîchit un token Strava expiré.
+    Le secret Strava reste côté serveur — l'app Android envoie uniquement son refresh_token.
+    Corps : { "refresh_token": "..." }
+    Retour : { "access_token", "refresh_token", "expires_at" }
+    """
+    refresh_token = body.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="refresh_token manquant")
+
+    strava_client_id = os.getenv("STRAVA_CLIENT_ID")
+    strava_client_secret = os.getenv("STRAVA_CLIENT_SECRET")
+
+    if not strava_client_id or not strava_client_secret:
+        raise HTTPException(status_code=500, detail="Variables Strava manquantes côté backend")
+
+    response = requests.post(
+        "https://www.strava.com/oauth/token",
+        data={
+            "client_id": strava_client_id,
+            "client_secret": strava_client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token"
+        },
+        timeout=20
+    )
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Erreur Strava : {response.text}"
+        )
+
+    data = response.json()
+    return {
+        "access_token": data.get("access_token"),
+        "refresh_token": data.get("refresh_token"),
+        "expires_at": data.get("expires_at"),
+    }
