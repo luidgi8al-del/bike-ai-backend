@@ -4,3 +4,4 @@ openai>=1.50.0
 python-dotenv>=1.0.1
 pydantic>=2.8.0
 requests>=2.32.0
+python-multipart>=0.0.9
