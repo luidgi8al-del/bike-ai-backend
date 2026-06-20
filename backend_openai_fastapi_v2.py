@@ -505,108 +505,21 @@ def strava_refresh(body: Dict[str, Any]) -> Dict[str, Any]:
 #  Route Garmin Upload
 # ─────────────────────────────────────────────
 
-GARMIN_SSO_URL = "https://sso.garmin.com/sso/signin"
-GARMIN_UPLOAD_URL = "https://connect.garmin.com/modern/proxy/upload-service/upload/.tcx"
+GARMIN_UPLOAD_URL = "https://connectapi.garmin.com/upload-service/upload"
 
-def garmin_login(email: str, password: str) -> requests.Session:
+def garmin_login(email: str, password: str):
     """
-    Authentification Garmin Connect via SSO.
-    Retourne une session authentifiée.
+    Authentification Garmin Connect via la librairie garminconnect.
     """
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "origin": "https://sso.garmin.com",
-        "referer": "https://sso.garmin.com/sso/signin",
-    })
-
-    # 1. Récupérer le ticket SSO
-    params = {
-        "service": "https://connect.garmin.com/modern/",
-        "webhost": "https://connect.garmin.com",
-        "source": "https://connect.garmin.com/signin/",
-        "redirectAfterAccountLoginUrl": "https://connect.garmin.com/modern/",
-        "redirectAfterAccountCreationUrl": "https://connect.garmin.com/modern/",
-        "gauthHost": "https://sso.garmin.com/sso",
-        "locale": "fr_FR",
-        "id": "gauth-widget",
-        "cssUrl": "https://static.garmincdn.com/com.garmin.connect/ui/css/gauth-custom-v1.2-min.css",
-        "clientId": "GarminConnect",
-        "rememberMeShown": "true",
-        "rememberMeChecked": "false",
-        "createAccountShown": "true",
-        "openCreateAccount": "false",
-        "displayNameShown": "false",
-        "consumeServiceTicket": "false",
-        "initialFocus": "true",
-        "embedWidget": "false",
-        "generateExtraServiceTicket": "true",
-        "generateTwoExtraServiceTickets": "false",
-        "generateNoServiceTicket": "false",
-        "globalOptInShown": "true",
-        "globalOptInChecked": "false",
-        "mobile": "false",
-        "connectLegalTerms": "true",
-        "showTermsOfUse": "false",
-        "showPrivacyPolicy": "false",
-        "showConnectLegalAge": "false",
-        "locationPromptShown": "true",
-        "showPassword": "true",
-        "useCustomHeader": "false",
-        "mfaRequired": "false",
-        "performMFACheck": "false",
-        "checkPassword": "false",
-    }
-
-    get_resp = session.get(GARMIN_SSO_URL, params=params, timeout=15)
-    if not get_resp.ok:
-        raise HTTPException(status_code=502, detail="Impossible de contacter Garmin SSO.")
-
-    # 2. POST credentials
-    post_data = {
-        "username": email,
-        "password": password,
-        "embed": "false",
-        "_eventId": "submit",
-        "displayNameRequired": "false",
-    }
-
-    post_resp = session.post(
-        GARMIN_SSO_URL,
-        params=params,
-        data=post_data,
-        timeout=15,
-    )
-
-    if "ticket" not in post_resp.url and "ticket" not in post_resp.text:
-        raise HTTPException(
-            status_code=401,
-            detail="Identifiants Garmin incorrects ou connexion refusée."
-        )
-
-    # 3. Extraire le ticket et finaliser la session sur connect.garmin.com
-    ticket = None
-    if "ticket=" in post_resp.url:
-        ticket = post_resp.url.split("ticket=")[-1].split("&")[0]
-    elif "ticket=" in post_resp.text:
-        import re
-        match = re.search(r'ticket=([A-Za-z0-9\-_]+)', post_resp.text)
-        if match:
-            ticket = match.group(1)
-
-    if not ticket:
-        raise HTTPException(status_code=401, detail="Ticket SSO Garmin introuvable.")
-
-    # 4. Valider le ticket sur connect.garmin.com
-    connect_resp = session.get(
-        "https://connect.garmin.com/modern/",
-        params={"ticket": ticket},
-        timeout=15,
-    )
-    if not connect_resp.ok:
-        raise HTTPException(status_code=502, detail="Impossible de valider la session Garmin Connect.")
-
-    return session
+    try:
+        from garminconnect import Garmin
+        client = Garmin(email=email, password=password)
+        client.login()
+        return client
+    except ImportError:
+        raise HTTPException(status_code=500, detail="garminconnect non installé sur le serveur.")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Identifiants Garmin incorrects : {str(e)}")
 
 
 @app.post("/garmin/upload")
@@ -629,38 +542,27 @@ async def garmin_upload(
 
     # Authentification Garmin
     try:
-        session = garmin_login(email, password)
+        garmin_client = garmin_login(email, password)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Erreur connexion Garmin : {str(e)}")
 
-    # Upload du fichier TCX
+    # Upload du fichier TCX via garminconnect
     try:
-        upload_resp = session.post(
-            GARMIN_UPLOAD_URL,
-            files={"data": (file.filename or "seance.tcx", tcx_content, "application/vnd.garmin.tcx+xml")},
-            headers={
-                "NK": "NT",
-                "X-HTTP-Method-Override": "POST",
-            },
-            timeout=30,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Erreur upload Garmin : {str(e)}")
-
-    if upload_resp.status_code in (200, 201):
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tcx") as tmp:
+            tmp.write(tcx_content)
+            tmp_path = tmp.name
         try:
-            result = upload_resp.json()
-        except Exception:
-            result = {}
-        return {"status": "success", "message": "Séance uploadée vers Garmin Connect ✓", "detail": result}
-
-    elif upload_resp.status_code == 409:
-        return {"status": "duplicate", "message": "Cette séance existe déjà dans Garmin Connect."}
-
-    else:
-        raise HTTPException(
-            status_code=upload_resp.status_code,
-            detail=f"Garmin Connect a refusé l'upload : {upload_resp.text[:300]}"
-        )
+            result = garmin_client.upload_activity(tmp_path)
+            return {"status": "success", "message": "Séance uploadée vers Garmin Connect ✓", "detail": str(result)}
+        finally:
+            os.unlink(tmp_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        err = str(e).lower()
+        if "already" in err or "duplicate" in err or "409" in err:
+            return {"status": "duplicate", "message": "Cette séance existe déjà dans Garmin Connect."}
+        raise HTTPException(status_code=502, detail=f"Erreur upload Garmin : {str(e)}")
