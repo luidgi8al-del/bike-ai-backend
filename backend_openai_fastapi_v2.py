@@ -566,3 +566,209 @@ async def garmin_upload(
         if "already" in err or "duplicate" in err or "409" in err:
             return {"status": "duplicate", "message": "Cette séance existe déjà dans Garmin Connect."}
         raise HTTPException(status_code=502, detail=f"Erreur upload Garmin : {str(e)}")
+
+
+# ─────────────────────────────────────────────
+#  Routes Intervals.icu
+# ─────────────────────────────────────────────
+
+INTERVALS_BASE_URL = "https://intervals.icu/api/v1"
+
+def intervals_auth(api_key: str):
+    import base64
+    credentials = base64.b64encode(f"API_KEY:{api_key}".encode()).decode()
+    return {"Authorization": f"Basic {credentials}", "Accept": "application/json"}
+
+
+@app.post("/intervals/upload")
+async def intervals_upload_workout(
+    api_key: str = Form(...),
+    athlete_id: str = Form(...),
+    file: UploadFile = File(...)
+) -> Dict[str, Any]:
+    """
+    Upload un fichier TCX comme workout planifié vers Intervals.icu.
+    """
+    tcx_content = await file.read()
+    if not tcx_content:
+        raise HTTPException(status_code=400, detail="Fichier TCX vide.")
+
+    try:
+        headers = intervals_auth(api_key)
+        headers["Content-Type"] = "application/xml"
+
+        response = requests.post(
+            f"{INTERVALS_BASE_URL}/athlete/{athlete_id}/activities",
+            headers=headers,
+            data=tcx_content,
+            timeout=30
+        )
+
+        if response.status_code in (200, 201):
+            return {"status": "success", "message": "Séance envoyée vers Intervals.icu ✓"}
+        elif response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Clé API Intervals.icu invalide.")
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Intervals.icu a refusé : {response.text[:300]}"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erreur Intervals.icu : {str(e)}")
+
+
+@app.get("/intervals/wellness")
+async def intervals_get_wellness(
+    api_key: str,
+    athlete_id: str,
+    date: str = None
+) -> Dict[str, Any]:
+    """
+    Récupère les données wellness (VFC, FC repos, sommeil, Body Battery, stress).
+    date format: YYYY-MM-DD (défaut: aujourd'hui)
+    """
+    import datetime
+    if not date:
+        date = datetime.date.today().isoformat()
+
+    try:
+        headers = intervals_auth(api_key)
+        response = requests.get(
+            f"{INTERVALS_BASE_URL}/athlete/{athlete_id}/wellness/{date}",
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "status": "success",
+                "date": date,
+                "hrv": data.get("hrv"),
+                "hrvSdnn": data.get("hrvSdnn"),
+                "restingHR": data.get("restingHR"),
+                "spO2": data.get("spO2"),
+                "sleepSecs": data.get("sleepSecs"),
+                "sleepScore": data.get("sleepScore"),
+                "sleepQuality": data.get("sleepQuality"),
+                "bodyBattery": data.get("bodyBattery"),
+                "stress": data.get("stress"),
+                "steps": data.get("steps"),
+                "weight": data.get("weight"),
+                "ctl": data.get("ctl"),
+                "atl": data.get("atl"),
+                "form": data.get("form"),
+            }
+        elif response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Clé API invalide.")
+        elif response.status_code == 404:
+            return {"status": "no_data", "date": date, "message": "Pas de données wellness pour cette date."}
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text[:200])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erreur Intervals.icu : {str(e)}")
+
+
+@app.get("/intervals/wellness/range")
+async def intervals_get_wellness_range(
+    api_key: str,
+    athlete_id: str,
+    oldest: str,
+    newest: str
+) -> Dict[str, Any]:
+    """
+    Récupère les données wellness sur une plage de dates.
+    oldest/newest format: YYYY-MM-DD
+    """
+    try:
+        headers = intervals_auth(api_key)
+        response = requests.get(
+            f"{INTERVALS_BASE_URL}/athlete/{athlete_id}/wellness",
+            headers=headers,
+            params={"oldest": oldest, "newest": newest},
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            return {"status": "success", "data": response.json()}
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text[:200])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erreur Intervals.icu : {str(e)}")
+
+
+@app.get("/intervals/activities")
+async def intervals_get_activities(
+    api_key: str,
+    athlete_id: str,
+    oldest: str = None,
+    newest: str = None
+) -> Dict[str, Any]:
+    """
+    Récupère les activités récentes depuis Intervals.icu.
+    """
+    import datetime
+    if not newest:
+        newest = datetime.date.today().isoformat()
+    if not oldest:
+        oldest = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+
+    try:
+        headers = intervals_auth(api_key)
+        response = requests.get(
+            f"{INTERVALS_BASE_URL}/athlete/{athlete_id}/activities",
+            headers=headers,
+            params={"oldest": oldest, "newest": newest},
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            return {"status": "success", "activities": response.json()}
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text[:200])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erreur Intervals.icu : {str(e)}")
+
+
+@app.post("/intervals/workout")
+async def intervals_push_workout(
+    body: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Pousse un workout planifié structuré vers le calendrier Intervals.icu.
+    Body: { api_key, athlete_id, workout: { name, description, date, type, steps... } }
+    """
+    api_key = body.get("api_key", "")
+    athlete_id = body.get("athlete_id", "")
+    workout = body.get("workout", {})
+
+    if not api_key or not athlete_id or not workout:
+        raise HTTPException(status_code=400, detail="api_key, athlete_id et workout requis.")
+
+    try:
+        headers = intervals_auth(api_key)
+        headers["Content-Type"] = "application/json"
+
+        response = requests.post(
+            f"{INTERVALS_BASE_URL}/athlete/{athlete_id}/events",
+            headers=headers,
+            json=workout,
+            timeout=15
+        )
+
+        if response.status_code in (200, 201):
+            return {"status": "success", "message": "Workout ajouté au calendrier Intervals.icu ✓", "detail": response.json()}
+        else:
+            raise HTTPException(status_code=response.status_code, detail=f"Intervals.icu : {response.text[:300]}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erreur Intervals.icu : {str(e)}")
