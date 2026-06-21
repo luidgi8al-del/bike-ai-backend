@@ -619,6 +619,36 @@ async def intervals_upload_workout(
         raise HTTPException(status_code=502, detail=f"Erreur Intervals.icu : {str(e)}")
 
 
+@app.get("/intervals/athlete")
+async def intervals_get_athlete(
+    api_key: str,
+    athlete_id: str
+) -> Dict[str, Any]:
+    """Récupère le profil athlète Intervals.icu (dont VO2max estimée)."""
+    try:
+        headers = intervals_auth(api_key)
+        response = requests.get(
+            f"{INTERVALS_BASE_URL}/athlete/{athlete_id}",
+            headers=headers,
+            timeout=15
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "status": "success",
+                "vo2max": data.get("vo2max"),
+                "ftp": data.get("ftp"),
+                "weight": data.get("weight"),
+                "name": data.get("name"),
+            }
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text[:200])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erreur Intervals.icu : {str(e)}")
+
+
 @app.get("/intervals/wellness")
 async def intervals_get_wellness(
     api_key: str,
