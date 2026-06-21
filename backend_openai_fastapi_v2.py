@@ -448,14 +448,29 @@ def strava_callback(
         timeout=20
     )
 
+    if not response.ok:
+        return JSONResponse(
+            {"status": "error", "message": f"Erreur Strava : {response.text}"},
+            status_code=response.status_code
+        )
+
     token_data = response.json()
+    access_token = token_data.get("access_token")
+    refresh_token = token_data.get("refresh_token")
+    expires_at = token_data.get("expires_at")
+
+    if not access_token or not refresh_token or not expires_at:
+        return JSONResponse(
+            {"status": "error", "message": "Réponse Strava incomplète"},
+            status_code=502
+        )
 
     redirect_url = (
         f"alexapp://strava-callback"
         f"?status=success"
-        f"&access_token={token_data.get('access_token')}"
-        f"&refresh_token={token_data.get('refresh_token')}"
-        f"&expires_at={token_data.get('expires_at')}"
+        f"&access_token={access_token}"
+        f"&refresh_token={refresh_token}"
+        f"&expires_at={expires_at}"
     )
 
     return RedirectResponse(url=redirect_url)
