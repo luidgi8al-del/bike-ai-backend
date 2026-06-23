@@ -17,12 +17,7 @@ load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
-if not OPENAI_API_KEY:
-    raise RuntimeError(
-        "OPENAI_API_KEY manquante. Ajoute-la dans .env ou dans les variables d'environnement."
-    )
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+server_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI(title="Coach Cyclisme IA V2", version="2.1.0")
 
@@ -82,6 +77,7 @@ class CoachRequest(BaseModel):
     message: str
     profile: ProfilePayload
     day_data: DayPayload
+    openai_api_key: Optional[str] = None
 
 
 class CoachResponse(BaseModel):
@@ -111,6 +107,7 @@ class DashboardRequest(BaseModel):
     mode: str = "dashboard_analysis"
     profile: ProfilePayload
     day_data: DayPayload
+    openai_api_key: Optional[str] = None
 
 
 class DashboardResponse(BaseModel):
@@ -280,7 +277,20 @@ Règles :
 #  Logique OpenAI
 # ─────────────────────────────────────────────
 
+def get_openai_client(user_api_key: Optional[str]) -> OpenAI:
+    api_key = (user_api_key or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=402,
+            detail="Clé OpenAI personnelle requise pour utiliser les fonctions IA."
+        )
+    if not api_key.startswith("sk-"):
+        raise HTTPException(status_code=400, detail="Clé OpenAI invalide.")
+    return OpenAI(api_key=api_key)
+
+
 def openai_recommendation(req: CoachRequest) -> CoachResponse:
+    client = get_openai_client(req.openai_api_key)
     context_summary = build_context_summary(req)
 
     user_payload = {
@@ -328,6 +338,7 @@ def openai_recommendation(req: CoachRequest) -> CoachResponse:
 
 
 def openai_dashboard(req: DashboardRequest) -> DashboardResponse:
+    client = get_openai_client(req.openai_api_key)
     d = req.day_data
     p = req.profile
     health_summary = build_health_summary(d.sante)
