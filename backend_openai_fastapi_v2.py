@@ -292,6 +292,12 @@ Règles absolues :
 15. target_type vaut ftp_percent pour % FTP, watts pour watts, rpe pour ressenti, free si aucune cible.
 16. intensity vaut warmup, active, recovery ou cooldown.
 17. La somme de workout_steps doit etre coherente avec duree_totale_min.
+18. Une etape recovery ou cooldown ne doit jamais avoir target_type free : donne toujours une cible facile.
+19. Pour recovery en velo avec FTP disponible : target_type ftp_percent, target_low 40, target_high 55.
+20. Pour cooldown en velo avec FTP disponible : target_type ftp_percent, target_low 40, target_high 60.
+21. Pour warmup en velo avec FTP disponible : target_type ftp_percent, target_low 50, target_high 70.
+22. Si FTP absente, utilise target_type rpe pour les recuperations : recovery RPE 1-2, cooldown RPE 1-2, warmup RPE 2-4.
+23. Les recuperations entre repetitions font partie de l'entrainement : elles doivent etre dans workout_steps avec leur duree et leur cible.
 
 Repères TSB :
 - TSB <= -15 : alerte fatigue forte
