@@ -87,6 +87,7 @@ class WorkoutStep(BaseModel):
     target_low: Optional[float] = None
     target_high: Optional[float] = None
     intensity: Literal["warmup", "active", "recovery", "cooldown"]
+    shape: Literal["steady", "ramp_up", "ramp_down"] = "steady"
     notes: Optional[str] = None
 
 
@@ -223,11 +224,15 @@ RESPONSE_JSON_SCHEMA: Dict[str, Any] = {
                             "type": "string",
                             "enum": ["warmup", "active", "recovery", "cooldown"]
                         },
+                        "shape": {
+                            "type": "string",
+                            "enum": ["steady", "ramp_up", "ramp_down"]
+                        },
                         "notes": {"type": ["string", "null"]}
                     },
                     "required": [
                         "name", "duration_sec", "target_type", "target_low",
-                        "target_high", "intensity", "notes"
+                        "target_high", "intensity", "shape", "notes"
                     ]
                 }
             }
@@ -356,6 +361,20 @@ Catalogue de structuration velo :
 77. Pour "endurance active" en velo avec FTP disponible, utiliser 65-75% FTP.
 78. Si tu ecris une cible en %FTP dans workout_steps, elle sera convertie en watts par l'app/Intervals ; si tu ecris watts, elle doit etre coherente avec FTP.
 79. Ne jamais laisser une etape velo en "libre" seulement parce que l'effort est facile : facile doit avoir une cible basse.
+80. La duree_totale_min doit etre egale a la somme de workout_steps arrondie a la minute la plus proche.
+81. Si tu annonces "20 min progressif avec 3 openers inclus", alors les paliers progressifs + openers + recuperations associees doivent totaliser 20 min exactement.
+82. Un echauffement "progressif avec openers inclus" doit commencer bas, monter par paliers, inclure les openers hauts, puis inclure leurs recuperations basses dans la meme duree d'echauffement.
+83. Ne mets jamais une duree totale marketing ou approximative : elle doit correspondre au fichier Garmin.
+84. Si les blocs principaux + echauffement + retour au calme ne remplissent pas la duree totale souhaitee, ajoute explicitement une etape endurance ou endurance facile dans le texte ET dans workout_steps.
+85. Retour au calme, cooldown, fin de seance, redescendre, relacher ou tres facile = target_high maximum 50% FTP, jamais 55-60% FTP.
+86. Pour un retour au calme de 10 min tres facile, utiliser par exemple 10 min 35-45% FTP ou 40-50% FTP, pas plus.
+87. Chaque workout_step doit avoir shape : steady, ramp_up ou ramp_down.
+88. Constant/stable/regulier = shape steady.
+89. Progressif/montee progressive/build/ramp/augmentation = shape ramp_up avec target_low = debut et target_high = fin.
+90. Degressif/descente progressive/reduire/redescendre = shape ramp_down avec target_low = fin basse et target_high = depart haut.
+91. Pour une rampe, ne decoupe pas en gros blocs dans la reponse IA : donne une seule etape ramp_up/ramp_down avec la duree totale et les cibles depart/fin.
+92. Exemple : 15 min progressif de 150 a 200 W = une etape duration_sec 900, target_type watts, target_low 150, target_high 200, shape ramp_up.
+93. Exemple : 10 min retour au calme de 180 a 120 W = une etape duration_sec 600, target_type watts, target_low 120, target_high 180, shape ramp_down, intensity cooldown.
 
 Repères TSB :
 - TSB <= -15 : alerte fatigue forte
@@ -433,6 +452,11 @@ def normalize_workout_steps(data: Dict[str, Any], profile: ProfilePayload) -> Di
             target_type = "free"
         step["target_type"] = target_type
 
+        shape = str(step.get("shape") or "steady").lower().strip()
+        if shape not in {"steady", "ramp_up", "ramp_down"}:
+            shape = infer_step_shape(step)
+        step["shape"] = shape
+
         low = safe_float(step.get("target_low"))
         high = safe_float(step.get("target_high"))
         text = step_search_text(step)
@@ -457,6 +481,9 @@ def normalize_workout_steps(data: Dict[str, Any], profile: ProfilePayload) -> Di
         normalized_steps.append(step)
 
     data["workout_steps"] = normalized_steps
+    total_seconds = sum(int(step.get("duration_sec") or 0) for step in normalized_steps)
+    if total_seconds > 0:
+        data["duree_totale_min"] = max(1, round(total_seconds / 60))
     return data
 
 
@@ -517,6 +544,17 @@ def infer_step_intensity(step: Dict[str, Any]) -> str:
     return "active"
 
 
+def infer_step_shape(step: Dict[str, Any]) -> str:
+    text = step_search_text(step)
+    if any(word in text for word in ["degressif", "dégressif", "descente", "reduire", "réduire", "redescendre"]):
+        return "ramp_down"
+    if any(word in text for word in PROGRESSIVE_WORDS):
+        return "ramp_up"
+    if any(word in text for word in COOLDOWN_WORDS):
+        return "ramp_down"
+    return "steady"
+
+
 def needs_power_target(
     target_type: str,
     low: Optional[float],
@@ -537,7 +575,7 @@ def needs_power_target(
 
 def default_ftp_target_for_step(intensity: str, text: str) -> tuple[float, float]:
     if intensity == "cooldown":
-        return 35.0, 50.0
+        return 35.0, 45.0
     if intensity == "recovery":
         return 40.0, 50.0
     if intensity == "warmup":
@@ -568,7 +606,7 @@ def default_ftp_target_for_step(intensity: str, text: str) -> tuple[float, float
 
 def default_ftp_target_for_step_enhanced(intensity: str, text: str) -> tuple[float, float]:
     if intensity == "cooldown":
-        return 35.0, 50.0
+        return 35.0, 45.0
     if intensity == "recovery":
         return 40.0, 50.0
     if intensity == "warmup":
@@ -615,7 +653,7 @@ def clamp_ftp_target_for_step(
         low, high = high, low
 
     if intensity == "cooldown":
-        return min(low, 45.0), min(high, 50.0)
+        return min(low, 40.0), min(high, 45.0)
     if intensity == "recovery":
         return min(low, 45.0), min(high, 50.0)
     if any(word in text for word in ["tres facile", "très facile", "souple", "tranquille", "recup"]):
