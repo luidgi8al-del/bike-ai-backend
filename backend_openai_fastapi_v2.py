@@ -83,7 +83,7 @@ class CoachRequest(BaseModel):
 class WorkoutStep(BaseModel):
     name: str
     duration_sec: int
-    target_type: Literal["ftp_percent", "watts", "rpe", "free"]
+    target_type: Literal["ftp_percent", "watts", "heart_rate_bpm", "heart_rate_percent", "rpe", "free"]
     target_low: Optional[float] = None
     target_high: Optional[float] = None
     intensity: Literal["warmup", "active", "recovery", "cooldown"]
@@ -215,7 +215,7 @@ RESPONSE_JSON_SCHEMA: Dict[str, Any] = {
                         "duration_sec": {"type": "integer"},
                         "target_type": {
                             "type": "string",
-                            "enum": ["ftp_percent", "watts", "rpe", "free"]
+                            "enum": ["ftp_percent", "watts", "heart_rate_bpm", "heart_rate_percent", "rpe", "free"]
                         },
                         "target_low": {"type": ["number", "null"]},
                         "target_high": {"type": ["number", "null"]},
@@ -298,6 +298,64 @@ Règles absolues :
 21. Pour warmup en velo avec FTP disponible : target_type ftp_percent, target_low 50, target_high 70.
 22. Si FTP absente, utilise target_type rpe pour les recuperations : recovery RPE 1-2, cooldown RPE 1-2, warmup RPE 2-4.
 23. Les recuperations entre repetitions font partie de l'entrainement : elles doivent etre dans workout_steps avec leur duree et leur cible.
+24. Le texte lisible et workout_steps doivent raconter exactement la meme seance : meme duree, meme ordre, memes recuperations.
+25. Si echauffement annonce 20 min, la somme des steps warmup/openers/recovery d'echauffement doit faire 20 min.
+26. Pour un echauffement progressif, decoupe en paliers : facile puis endurance active, par exemple 10 min 50-60% FTP puis 5 min 60-70% FTP.
+27. Les accelerations/openers de 15 a 30 s doivent avoir une vraie cible haute si FTP disponible : target_type ftp_percent, target_low 105, target_high 120, intensity active.
+28. Les recuperations entre accelerations/openers doivent avoir target_type ftp_percent, target_low 40, target_high 50, intensity recovery.
+29. Pour les efforts actifs cyclistes, si FTP est disponible, evite target_type rpe : utilise ftp_percent ou watts.
+30. Le retour au calme tres facile ne doit pas depasser 55% FTP : target_low 35 ou 40, target_high 50 ou 55.
+31. Si le texte dit "tres facile", la cible structuree doit etre basse : jamais au-dessus de 55% FTP.
+32. Si une etape utilise watts, elle doit etre coherente avec le pourcentage FTP et les watts du profil.
+33. Ne jamais appliquer une duree fixe par habitude : respecte exactement les durees demandees, que ce soit 30 s, 2 min, 5 min, 10 min, 15 min, 20 min, 2 h ou autre.
+34. Le texte lisible est pour l'utilisateur ; workout_steps est pour Garmin/Intervals. workout_steps doit etre executable tel quel sur un GPS.
+35. Les notes ne remplacent jamais la cible : la cible doit etre dans target_type, target_low et target_high.
+36. Si FTP existe, priorite aux cibles ftp_percent ou watts. Si FTP absente, utiliser rpe ou heart_rate_bpm/heart_rate_percent si les donnees cardio existent.
+37. Si l'IA utilise watts, elle doit calculer les watts depuis la FTP du profil quand elle existe. Sinon utiliser ftp_percent plutot que des watts inventes.
+38. Si FTP existe, eviter target_type free pour une etape velo. free est reserve a une consigne vraiment non structuree hors cible.
+39. Le total de toutes les etapes workout_steps doit etre proche de duree_totale_min : tolerance maximale 2 min, sauf justification dans le texte.
+40. Si le texte mentionne une duree totale, l'echauffement, le bloc principal et le retour au calme doivent tous etre representes dans workout_steps.
+41. Les noms d'etapes doivent etre courts et utiles pour un GPS : Echauffement, Progressif 1, Openers, Recuperation, Bloc 1 rep 1, Retour au calme.
+
+Catalogue de structuration velo :
+42. Constant/steady : une consigne constante devient une etape unique avec duree exacte et cible stable.
+43. Progressif/build/ramp/montee progressive/acceleration progressive : augmentation graduelle de l'intensite du debut a la fin.
+44. Une progression de plus de 4 min doit etre decoupee en 2 a 5 sous-etapes croissantes dont la somme respecte la duree annoncee.
+45. Exemple : 10 min progressives de 150 a 250 W = 3 min 150-180 W, 3 min 180-210 W, 4 min 210-250 W.
+46. Degressif/reduction/descente progressive : decouper en sous-etapes decroissantes, par exemple 4 min haut, 3 min moyen, 3 min bas.
+47. Alternance/intervalle : creer chaque repetition active puis sa recovery separee, dans l'ordre exact.
+48. Recuperation entre repetitions : creer une etape recovery apres chaque repetition sauf si le texte precise autrement.
+49. Recuperation entre blocs : creer une etape recovery distincte entre les blocs, avec la duree exacte.
+50. Micro-intervalles 30/30, 40/20, 30/15, 15/15, Ronnestad : developper chaque effort et chaque recuperation. Pas de boucle implicite.
+51. Over-under : alterner explicitement under et over, par exemple 2 min 88-94% puis 1 min 102-108%, repete autant que necessaire.
+52. Pyramide/echelle/ladder : developper chaque palier dans l'ordre exact, par exemple 1 min, 2 min, 3 min, 2 min, 1 min, avec recuperations separees si elles existent.
+53. Fartlek/variable/relances : convertir en repetitions simples et claires, avec effort cible et recovery cible.
+54. Sprint/relance/depart explosif/openers : cible active haute, puis vraie recuperation basse separee.
+55. Sprints tres courts 5 a 15 s : target_type ftp_percent 140-200 ou watts coherents ; notes = sprint/relance, cadence/position si utile.
+56. Accelerations/openers 15 a 30 s : target_type ftp_percent 105-130 selon objectif ; intensity active ; recovery 40-50% FTP.
+57. VO2/PMA : en general 105-125% FTP selon duree ; plus l'effort est court, plus la cible peut etre haute.
+58. Anaerobie/capacite lactique : efforts courts 120-160% FTP selon duree, recoveries longues et basses.
+59. Seuil : 95-105% FTP ; sweet spot : 88-94% FTP ; tempo : 75-88% FTP ; endurance : 55-75% FTP.
+60. Recuperation active/endurance tres facile : 35-55% FTP selon contexte, jamais une cible haute.
+61. Sortie longue/endurance libre : fournir une plage endurance claire si FTP disponible, par exemple 55-70% FTP, meme si le texte dit "au feeling".
+62. Echauffement : si progressif, decouper en paliers ; si openers inclus, ajouter effort haut et recuperation basse pour chaque opener.
+63. Retour au calme : tres facile, bas, generalement 35-50% FTP ou RPE 1-2 ; jamais au-dessus de 55% FTP si le texte dit tres facile.
+64. Cadence basse/force : la cible principale reste watts/%FTP ; cadence, position assise, cote, braquet ou technique vont dans notes.
+65. Velocite/souplesse : la cible principale reste watts/%FTP ou RPE ; cadence elevee et technique vont dans notes.
+66. Cote/montee/home trainer/route/XCO : garder la cible principale en watts/%FTP ; terrain et consignes techniques vont dans notes.
+67. FC/cardio : si la seance est explicitement basee sur FC, utiliser heart_rate_bpm ou heart_rate_percent si les donnees existent ; sinon convertir vers RPE/%FTP.
+68. Zone libre impossible a executer : si une etape est velo et dure plus de 30 s, elle doit avoir une cible sauf cas exceptionnel.
+69. Si une consigne est ambigue, choisir une structure conservatrice et claire plutot qu'un bloc free.
+70. Si la seance combine plusieurs formats, developper chaque format dans l'ordre : echauffement, openers, bloc 1, recovery bloc, bloc 2, endurance, cooldown.
+71. Le texte et workout_steps doivent rester coherents : aucune etape structuree ne doit contredire le texte, et aucune consigne importante du texte ne doit manquer dans workout_steps.
+72. Si FTP est disponible, toutes les etapes velo doivent etre exploitables en puissance : target_type ftp_percent ou watts, y compris recuperation, tranquille, souple, libre, endurance, cooldown.
+73. Les mots "libre", "tranquille", "souple", "facile", "recup", "recuperation", "retour au calme" ne signifient jamais target_type free si FTP est disponible.
+74. Pour "libre/tranquille/souple/facile" en velo avec FTP disponible, utiliser une cible basse : 40-60% FTP selon contexte.
+75. Pour "recuperation" en velo avec FTP disponible, utiliser 35-50% FTP ou 40-55% FTP selon duree et fatigue.
+76. Pour "endurance facile" en velo avec FTP disponible, utiliser 55-70% FTP.
+77. Pour "endurance active" en velo avec FTP disponible, utiliser 65-75% FTP.
+78. Si tu ecris une cible en %FTP dans workout_steps, elle sera convertie en watts par l'app/Intervals ; si tu ecris watts, elle doit etre coherente avec FTP.
+79. Ne jamais laisser une etape velo en "libre" seulement parce que l'effort est facile : facile doit avoir une cible basse.
 
 Repères TSB :
 - TSB <= -15 : alerte fatigue forte
@@ -341,6 +399,244 @@ def get_openai_client(user_api_key: Optional[str]) -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
+def normalize_workout_steps(data: Dict[str, Any], profile: ProfilePayload) -> Dict[str, Any]:
+    """
+    Securite avant l'app : si FTP existe, aucune etape velo ne reste vague.
+    L'IA propose la structure, puis le backend garantit des cibles executables.
+    """
+    steps = data.get("workout_steps")
+    if not isinstance(steps, list):
+        data["workout_steps"] = []
+        return data
+
+    ftp_available = bool(profile.ftp and profile.ftp > 0)
+    normalized_steps: List[Dict[str, Any]] = []
+
+    for index, raw_step in enumerate(steps, start=1):
+        if not isinstance(raw_step, dict):
+            continue
+
+        step = dict(raw_step)
+        step["name"] = str(step.get("name") or f"Etape {index}").strip() or f"Etape {index}"
+        try:
+            step["duration_sec"] = max(1, int(step.get("duration_sec") or 1))
+        except (TypeError, ValueError):
+            step["duration_sec"] = 1
+
+        intensity = str(step.get("intensity") or "active").lower().strip()
+        if intensity not in {"warmup", "active", "recovery", "cooldown"}:
+            intensity = infer_step_intensity(step)
+        step["intensity"] = intensity
+
+        target_type = str(step.get("target_type") or "free").lower().strip()
+        if target_type not in {"ftp_percent", "watts", "heart_rate_bpm", "heart_rate_percent", "rpe", "free"}:
+            target_type = "free"
+        step["target_type"] = target_type
+
+        low = safe_float(step.get("target_low"))
+        high = safe_float(step.get("target_high"))
+        text = step_search_text(step)
+
+        if ftp_available:
+            if needs_power_target(target_type, low, high, intensity, text):
+                low, high = default_ftp_target_for_step_enhanced(intensity, text)
+                target_type = "ftp_percent"
+            elif target_type == "ftp_percent":
+                low, high = clamp_ftp_target_for_step(low, high, intensity, text)
+
+            step["target_type"] = target_type
+            step["target_low"] = low
+            step["target_high"] = high
+        else:
+            if target_type == "free" or low is None:
+                low, high = default_rpe_target_for_step(intensity, text)
+                step["target_type"] = "rpe"
+                step["target_low"] = low
+                step["target_high"] = high
+
+        normalized_steps.append(step)
+
+    data["workout_steps"] = normalized_steps
+    return data
+
+
+def safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None
+
+
+def step_search_text(step: Dict[str, Any]) -> str:
+    return f"{step.get('name', '')} {step.get('notes', '')}".lower()
+
+
+EASY_WORDS = [
+    "libre", "tranquille", "souple", "facile", "easy", "cool", "relache", "relâche",
+    "aisance", "confort", "doux", "douce", "leger", "legere", "léger", "légère",
+    "sans forcer", "au feeling", "conversationnel", "aerobie facile", "aérobie facile",
+    "endurance basse", "endurance douce", "z1", "zone 1", "z2 basse", "zone 2 basse"
+]
+RECOVERY_WORDS = [
+    "recup", "récup", "recuperation", "récupération", "recovery", "rest", "repos",
+    "contre-effort", "contre effort", "interbloc", "entre blocs", "entre les blocs",
+    "entre repetitions", "entre répétitions", "retour facile", "roule facile"
+]
+COOLDOWN_WORDS = [
+    "retour au calme", "cooldown", "calme", "redescendre", "relacher", "relâcher",
+    "fin de seance", "fin de séance", "decompression", "décompression"
+]
+WARMUP_WORDS = [
+    "echauffement", "échauffement", "warmup", "mise en route", "activation",
+    "deblocage", "déblocage"
+]
+PROGRESSIVE_WORDS = [
+    "progressif", "progressive", "montee", "montée", "ramp", "build", "augment",
+    "augmentation", "croissant", "de plus en plus", "acceleration progressive",
+    "accélération progressive"
+]
+OPENER_WORDS = [
+    "opener", "openers", "accel", "accél", "acceleration", "accélération",
+    "relance", "deblocage", "déblocage", "cadence elevee", "cadence élevée"
+]
+SPRINT_WORDS = ["sprint", "explosif", "explosive", "depart", "départ", "maximal"]
+ANAEROBIC_WORDS = ["anaer", "anaéro", "anaerobie", "anaérobie", "lactique"]
+
+
+def infer_step_intensity(step: Dict[str, Any]) -> str:
+    text = step_search_text(step)
+    if any(word in text for word in COOLDOWN_WORDS):
+        return "cooldown"
+    if any(word in text for word in RECOVERY_WORDS):
+        return "recovery"
+    if any(word in text for word in WARMUP_WORDS):
+        return "warmup"
+    return "active"
+
+
+def needs_power_target(
+    target_type: str,
+    low: Optional[float],
+    high: Optional[float],
+    intensity: str,
+    text: str,
+) -> bool:
+    if target_type in {"free", "rpe"}:
+        return True
+    if target_type in {"heart_rate_bpm", "heart_rate_percent"}:
+        return False
+    if target_type in {"ftp_percent", "watts"} and low is None and high is None:
+        return True
+    if any(word in text for word in EASY_WORDS + RECOVERY_WORDS + COOLDOWN_WORDS):
+        return target_type == "free" or low is None
+    return False
+
+
+def default_ftp_target_for_step(intensity: str, text: str) -> tuple[float, float]:
+    if intensity == "cooldown":
+        return 35.0, 50.0
+    if intensity == "recovery":
+        return 40.0, 50.0
+    if intensity == "warmup":
+        if any(word in text for word in ["progressif", "progressive", "montee", "build", "ramp"]):
+            return 50.0, 70.0
+        return 50.0, 65.0
+
+    if any(word in text for word in ["sprint", "explosif", "depart"]):
+        return 140.0, 180.0
+    if any(word in text for word in ["opener", "accel", "accél", "relance"]):
+        return 105.0, 130.0
+    if any(word in text for word in ["vo2", "pma"]):
+        return 110.0, 125.0
+    if any(word in text for word in ["anaer", "anaéro", "lactique"]):
+        return 120.0, 155.0
+    if "seuil" in text:
+        return 95.0, 105.0
+    if any(word in text for word in ["sweet", "sst"]):
+        return 88.0, 94.0
+    if "tempo" in text:
+        return 75.0, 88.0
+    if "endurance active" in text:
+        return 65.0, 75.0
+    if any(word in text for word in ["endurance", "facile", "souple", "tranquille", "libre"]):
+        return 55.0, 70.0
+    return 60.0, 75.0
+
+
+def default_ftp_target_for_step_enhanced(intensity: str, text: str) -> tuple[float, float]:
+    if intensity == "cooldown":
+        return 35.0, 50.0
+    if intensity == "recovery":
+        return 40.0, 50.0
+    if intensity == "warmup":
+        if any(word in text for word in PROGRESSIVE_WORDS):
+            return 50.0, 70.0
+        return 50.0, 65.0
+
+    if any(word in text for word in SPRINT_WORDS):
+        return 140.0, 180.0
+    if any(word in text for word in OPENER_WORDS):
+        return 105.0, 130.0
+    if any(word in text for word in ["vo2", "vo2max", "pma", "map", "i5", "z5"]):
+        return 110.0, 125.0
+    if any(word in text for word in ANAEROBIC_WORDS):
+        return 120.0, 155.0
+    if any(word in text for word in ["seuil", "threshold", "ftp", "z4", "i4"]):
+        return 95.0, 105.0
+    if any(word in text for word in ["sweet", "sst", "sweet spot"]):
+        return 88.0, 94.0
+    if any(word in text for word in ["tempo", "soutenu", "soutenue", "z3", "i3"]):
+        return 75.0, 88.0
+    if any(word in text for word in ["endurance active", "z2 haute", "zone 2 haute"]):
+        return 65.0, 75.0
+    if any(word in text for word in ["endurance", "z2", "zone 2"] + EASY_WORDS):
+        return 55.0, 70.0
+    return 60.0, 75.0
+
+
+def clamp_ftp_target_for_step(
+    low: Optional[float],
+    high: Optional[float],
+    intensity: str,
+    text: str,
+) -> tuple[Optional[float], Optional[float]]:
+    if low is None and high is None:
+        return default_ftp_target_for_step_enhanced(intensity, text)
+    if high is None:
+        high = low
+    if low is None:
+        low = high
+    if low is None or high is None:
+        return default_ftp_target_for_step_enhanced(intensity, text)
+    if low > high:
+        low, high = high, low
+
+    if intensity == "cooldown":
+        return min(low, 45.0), min(high, 50.0)
+    if intensity == "recovery":
+        return min(low, 45.0), min(high, 50.0)
+    if any(word in text for word in ["tres facile", "très facile", "souple", "tranquille", "recup"]):
+        return min(low, 50.0), min(high, 55.0)
+    return low, high
+
+
+def default_rpe_target_for_step(intensity: str, text: str) -> tuple[float, float]:
+    if intensity in {"recovery", "cooldown"}:
+        return 1.0, 2.0
+    if intensity == "warmup":
+        return 2.0, 4.0
+    if any(word in text for word in ["sprint", "vo2", "pma", "anaer", "anaéro"]):
+        return 8.0, 9.0
+    if "seuil" in text:
+        return 7.0, 8.0
+    if "tempo" in text:
+        return 5.0, 7.0
+    return 4.0, 6.0
+
+
 def openai_recommendation(req: CoachRequest) -> CoachResponse:
     client = get_openai_client(req.openai_api_key)
     context_summary = build_context_summary(req)
@@ -382,6 +678,8 @@ def openai_recommendation(req: CoachRequest) -> CoachResponse:
         data = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"JSON OpenAI invalide : {exc}") from exc
+
+    data = normalize_workout_steps(data, req.profile)
 
     try:
         return CoachResponse(**data)
