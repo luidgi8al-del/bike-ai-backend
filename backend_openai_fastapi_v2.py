@@ -80,6 +80,16 @@ class CoachRequest(BaseModel):
     openai_api_key: Optional[str] = None
 
 
+class WorkoutStep(BaseModel):
+    name: str
+    duration_sec: int
+    target_type: Literal["ftp_percent", "watts", "rpe", "free"]
+    target_low: Optional[float] = None
+    target_high: Optional[float] = None
+    intensity: Literal["warmup", "active", "recovery", "cooldown"]
+    notes: Optional[str] = None
+
+
 class CoachResponse(BaseModel):
     resume: str
     niveau_alerte: Literal["vert", "bleu", "orange", "rouge"]
@@ -96,6 +106,7 @@ class CoachResponse(BaseModel):
     alternative: str
     rpe_estime: int
     tags: List[str]
+    workout_steps: List[WorkoutStep] = Field(default_factory=list)
     moteur: str = "openai"
 
 
@@ -193,12 +204,39 @@ RESPONSE_JSON_SCHEMA: Dict[str, Any] = {
             "vigilance": {"type": "string"},
             "alternative": {"type": "string"},
             "rpe_estime": {"type": "integer"},
-            "tags": {"type": "array", "items": {"type": "string"}}
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "workout_steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "name": {"type": "string"},
+                        "duration_sec": {"type": "integer"},
+                        "target_type": {
+                            "type": "string",
+                            "enum": ["ftp_percent", "watts", "rpe", "free"]
+                        },
+                        "target_low": {"type": ["number", "null"]},
+                        "target_high": {"type": ["number", "null"]},
+                        "intensity": {
+                            "type": "string",
+                            "enum": ["warmup", "active", "recovery", "cooldown"]
+                        },
+                        "notes": {"type": ["string", "null"]}
+                    },
+                    "required": [
+                        "name", "duration_sec", "target_type", "target_low",
+                        "target_high", "intensity", "notes"
+                    ]
+                }
+            }
         },
         "required": [
             "resume", "niveau_alerte", "discipline", "objectif_du_jour", "type_seance",
             "duree_totale_min", "echauffement", "bloc_principal", "retour_au_calme",
-            "intensite", "pourquoi", "vigilance", "alternative", "rpe_estime", "tags"
+            "intensite", "pourquoi", "vigilance", "alternative", "rpe_estime", "tags",
+            "workout_steps"
         ]
     },
     "strict": True
@@ -246,6 +284,14 @@ Règles absolues :
 7. Si FTP disponible, utiliser des plages en % FTP. Sinon, RPE et sensations.
 8. Toujours proposer une alternative plus facile.
 9. La séance doit être réaliste pour le temps disponible.
+10. En plus du texte lisible, remplir obligatoirement workout_steps pour Garmin/Intervals.
+11. workout_steps doit etre une liste plate, dans l'ordre exact de la seance, sans boucle ni repeat implicite.
+12. Si tu prescris 5 x 3 min avec 3 min de recuperation, cree 10 objets alternes : effort, recup, effort, recup...
+13. Si tu prescris plusieurs blocs, developpe chaque bloc dans workout_steps et conserve l'ordre exact.
+14. duration_sec est toujours en secondes. target_low et target_high sont des nombres ou null.
+15. target_type vaut ftp_percent pour % FTP, watts pour watts, rpe pour ressenti, free si aucune cible.
+16. intensity vaut warmup, active, recovery ou cooldown.
+17. La somme de workout_steps doit etre coherente avec duree_totale_min.
 
 Repères TSB :
 - TSB <= -15 : alerte fatigue forte
