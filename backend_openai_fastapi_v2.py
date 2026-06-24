@@ -133,35 +133,216 @@ class DashboardResponse(BaseModel):
 #  Helpers
 # ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
+def to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def first_number_from_any(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
+        for key in ("value", "today", "current", "mesure", "moyenne", "avg"):
+            found = first_number_from_any(value.get(key))
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for item in value:
+            found = first_number_from_any(item)
+            if found is not None:
+                return found
+    if isinstance(value, str):
+        cleaned = value.replace(",", ".")
+        for token in cleaned.split():
+            try:
+                return float(token)
+            except ValueError:
+                continue
+    return None
+
+
+def infer_requested_focus(message: str, profile: ProfilePayload) -> str:
+    text = f"{message or ''} {profile.objectif or ''} {profile.discipline or ''}".lower()
+    if any(word in text for word in ["recup", "récup", "repos", "facile", "souple"]):
+        return "recuperation"
+    if any(word in text for word in ["vo2", "pma", "i5", "z5", "intervalles courts"]):
+        return "vo2_pma"
+    if any(word in text for word in ["seuil", "threshold", "ftp", "i4", "z4"]):
+        return "seuil"
+    if any(word in text for word in ["tempo", "sweet", "sst"]):
+        return "tempo_sweetspot"
+    if any(word in text for word in ["sprint", "anaer", "anaéro", "relance", "explos"]):
+        return "anaerobie_relances"
+    if any(word in text for word in ["grimpeur", "cote", "côte", "montee", "montée"]):
+        return "grimpeur_cote"
+    if any(word in text for word in ["endurance", "longue", "foncier"]):
+        return "endurance"
+    return "general"
+
+
+def infer_terrain(message: str, profile: ProfilePayload) -> str:
+    text = f"{message or ''} {profile.discipline or ''} {profile.sport or ''}".lower()
+    if any(word in text for word in ["home trainer", "home-trainer", "ht", "indoor"]):
+        return "home_trainer"
+    if any(word in text for word in ["xco", "vtt", "xc", "cross-country"]):
+        return "xco_vtt"
+    if any(word in text for word in ["cote", "côte", "montee", "montée", "grimpeur"]):
+        return "cote"
+    if any(word in text for word in ["route", "road"]):
+        return "route"
+    return (profile.discipline or "cyclisme").strip().lower() or "cyclisme"
+
+
 def build_context_summary(req: CoachRequest) -> Dict[str, Any]:
     p = req.profile
     d = req.day_data
+    message = req.message or ""
     discipline = (p.discipline or "").strip().lower()
     objectif = (p.objectif or "").strip()
+    sante = d.sante or {}
 
-    fatigue_flag = "normale"
-    if (d.tsb is not None and d.tsb <= -15) or (d.jours_intenses_recents or 0) >= 3:
-        fatigue_flag = "élevée"
-    elif (d.tsb is not None and d.tsb <= -7) or (d.jours_intenses_recents or 0) >= 2:
-        fatigue_flag = "modérée"
-    elif (d.tsb is not None and d.tsb >= 5):
-        fatigue_flag = "fraîcheur élevée"
+    tsb = to_float(d.tsb)
+    intense_days = d.jours_intenses_recents or 0
+    today_minutes = sum((a.duree_min or 0) for a in d.activites_du_jour)
+    today_rpe_max = max([a.rpe or 0 for a in d.activites_du_jour] or [0])
+    today_has_activity = today_minutes > 0 or len(d.activites_du_jour) > 0
+    today_load = d.charge_jour or 0
+
+    sleep_hours = first_number_from_any(sante.get("sommeil_heures") or sante.get("sleep_hours") or sante.get("sleep"))
+    hrv_value = first_number_from_any(d.hrv or sante.get("hrv") or sante.get("vfc"))
+    resting_hr = first_number_from_any(sante.get("fc_repos_mesure") or sante.get("fc_repos") or d.fc_repos_tendance)
+    resting_ref = first_number_from_any(p.fc_repos or p.fc_repos_profil)
+    resting_hr_delta = None
+    if resting_hr is not None and resting_ref is not None:
+        resting_hr_delta = resting_hr - resting_ref
+
+    fatigue_score = 0
+    reasons: List[str] = []
+
+    if tsb is not None:
+        if tsb <= -15:
+            fatigue_score += 3
+            reasons.append("TSB tres negatif")
+        elif tsb <= -7:
+            fatigue_score += 2
+            reasons.append("TSB negatif")
+        elif tsb >= 8:
+            fatigue_score -= 1
+            reasons.append("TSB favorable")
+
+    if intense_days >= 3:
+        fatigue_score += 3
+        reasons.append("plusieurs jours intenses recents")
+    elif intense_days >= 2:
+        fatigue_score += 2
+        reasons.append("deux jours intenses recents")
+
+    if today_minutes >= 120 or today_load >= 120:
+        fatigue_score += 3
+        reasons.append("grosse activite deja realisee aujourd'hui")
+    elif today_minutes >= 60 or today_load >= 70:
+        fatigue_score += 2
+        reasons.append("activite deja realisee aujourd'hui")
+    elif today_has_activity:
+        fatigue_score += 1
+        reasons.append("seance deja faite aujourd'hui")
+
+    if today_rpe_max >= 8:
+        fatigue_score += 2
+        reasons.append("intensite elevee deja faite aujourd'hui")
+
+    if sleep_hours is not None:
+        if sleep_hours < 5.5:
+            fatigue_score += 3
+            reasons.append("sommeil tres court")
+        elif sleep_hours < 6.5:
+            fatigue_score += 2
+            reasons.append("sommeil limite")
+        elif sleep_hours >= 8:
+            fatigue_score -= 1
+            reasons.append("sommeil favorable")
+
+    if resting_hr_delta is not None:
+        if resting_hr_delta >= 8:
+            fatigue_score += 3
+            reasons.append("FC repos nettement elevee")
+        elif resting_hr_delta >= 5:
+            fatigue_score += 2
+            reasons.append("FC repos elevee")
+
+    subjective = (d.fatigue_subjective or "").lower()
+    if any(word in subjective for word in ["tres fatigue", "très fatigué", "fatigue", "fatigué", "epuise", "épuisé"]):
+        fatigue_score += 2
+        reasons.append("fatigue subjective signalee")
+
+    if fatigue_score >= 6:
+        fatigue_flag = "elevee"
+        adaptation_level = "adaptation forte"
+        adaptation_strategy = "Conserver le theme demande si possible, mais reduire volume et intensite de 40 a 60%, privilegier endurance facile/technique ou recuperation."
+    elif fatigue_score >= 3:
+        fatigue_flag = "moderee"
+        adaptation_level = "adaptation moderee"
+        adaptation_strategy = "Conserver l'objectif demande, mais reduire le nombre de repetitions ou de blocs de 20 a 40%, allonger les recuperations, eviter un second gros bloc intense."
+    elif fatigue_score <= -1:
+        fatigue_flag = "fraicheur elevee"
+        adaptation_level = "adaptation faible"
+        adaptation_strategy = "La seance peut rester proche de la demande, tout en respectant la duree stricte et une progression prudente."
+    else:
+        fatigue_flag = "normale"
+        adaptation_level = "adaptation faible"
+        adaptation_strategy = "Respecter la demande, avec dosage standard et recuperations completes."
+
+    focus = infer_requested_focus(message, p)
+    terrain = infer_terrain(message, p)
 
     specificity = []
-    if discipline in {"xco", "vtt", "cross-country"}:
-        specificity.append("travail de relances, PMA courte, VO2max spécifique XCO, variations de cadence")
-    if discipline in {"route", "vélo route"}:
-        specificity.append("travail au seuil, tempo, VO2, endurance, sprints selon contexte")
-    if discipline in {"home trainer", "home-trainer", "ht"}:
-        specificity.append("formats très structurés et précis en temps et intensité")
+    if terrain == "xco_vtt":
+        specificity.append("relances courtes, PMA/VO2, changements de rythme, recuperations incompletes mais controlees")
+    elif terrain == "home_trainer":
+        specificity.append("blocs tres structures, cibles de puissance precises, pas de consignes vagues de terrain")
+    elif terrain == "cote":
+        specificity.append("puissance en montee, cadence stable ou force controlee, efforts soutenus sans sprint inutile")
+    elif terrain == "route":
+        specificity.append("endurance, tempo, seuil, VO2 ou sprint selon objectif et fraicheur")
 
     return {
         "fatigue_flag": fatigue_flag,
+        "fatigue_score": fatigue_score,
+        "niveau_adaptation": adaptation_level,
+        "strategie_adaptation": adaptation_strategy,
+        "raisons_adaptation": reasons[:6],
+        "objectif_demande_detecte": focus,
+        "terrain_detecte": terrain,
         "discipline_normalisee": discipline or "cyclisme",
-        "objectif": objectif or "performance générale",
+        "objectif": objectif or "performance generale",
         "specificity": specificity,
+        "activite_deja_faite_aujourdhui": {
+            "present": today_has_activity,
+            "duree_min": today_minutes,
+            "rpe_max": today_rpe_max,
+            "charge_jour": today_load,
+            "nombre": len(d.activites_du_jour),
+        },
+        "signaux_sante": {
+            "sommeil_heures": sleep_hours,
+            "fc_repos_mesuree": resting_hr,
+            "fc_repos_reference": resting_ref,
+            "fc_repos_ecart": resting_hr_delta,
+            "hrv": hrv_value,
+        },
+        "regles_dosage": [
+            "Ne jamais ignorer une activite deja realisee aujourd'hui.",
+            "Si fatigue moderee ou activite deja faite, garder le theme mais reduire le dosage.",
+            "Si fatigue forte, remplacer par une version prudente et expliquer clairement pourquoi.",
+            "Respecter strictement le temps demande par utilisateur.",
+        ],
     }
-
 
 def build_health_summary(sante: Optional[Dict[str, Any]]) -> str:
     if not sante:
@@ -379,6 +560,21 @@ Catalogue de structuration velo :
 93. Exemple : 10 min retour au calme de 180 a 120 W = une etape duration_sec 600, target_type watts, target_low 120, target_high 180, shape ramp_down, intensity cooldown.
 94. Une seance ne doit jamais passer directement d'un effort intense VO2/PMA/seuil/sprint vers le cooldown : ajoute une recuperation basse de 1 a 3 min avant le retour au calme.
 95. Si le dernier bloc contient des repetitions avec recuperation entre repetitions, ajoute aussi une recuperation apres la derniere repetition avant le cooldown, sauf si le cooldown est explicitement la recuperation finale.
+
+Adaptation personnalisee obligatoire :
+96. Lis toujours analyse_interne avant de construire la seance.
+97. analyse_interne.niveau_adaptation indique le dosage a appliquer : adaptation faible, adaptation moderee ou adaptation forte.
+98. Si activite_deja_faite_aujourdhui.present est vrai, ne propose jamais une seance comme si l'athlete etait frais.
+99. Si une activite de plus de 60 min ou une charge du jour elevee existe deja, garde le theme demande mais reduis le volume de 20 a 40%.
+100. Si une activite de plus de 120 min existe deja, evite deux gros blocs intenses ; propose au plus un bloc qualite court ou une version technique/endurance.
+101. Si l'utilisateur demande VO2/PMA mais que fatigue est moderee : garder VO2/PMA, reduire repetitions, conserver recuperations completes, eviter les enchainements trop longs.
+102. Si l'utilisateur demande VO2/PMA mais que fatigue est elevee : transformer en rappel VO2 court ou endurance active technique, et expliquer dans pourquoi.
+103. Si sommeil < 6h30, FC repos elevee, TSB negatif ou jours intenses recents : baisser le dosage meme si l'utilisateur demande intense.
+104. Si sommeil favorable, TSB favorable et pas d'activite deja faite : la seance peut rester proche de la demande.
+105. Respecter le terrain detecte : home trainer = blocs precis ; XCO/VTT = relances ; cote = cadence/force controlee ; route = structure plus reguliere.
+106. Le champ pourquoi doit mentionner explicitement l'adaptation principale : seance deja faite, TSB, sommeil, FC repos, fatigue ou fraicheur.
+107. Le champ vigilance doit indiquer quoi surveiller pendant la seance : derive cardiaque, jambes lourdes, puissance qui chute, respiration, ou douleur.
+108. L'objectif demande par l'utilisateur est prioritaire, mais le dosage doit etre ajuste a l'etat du jour.
 
 Repères TSB :
 - TSB <= -15 : alerte fatigue forte
