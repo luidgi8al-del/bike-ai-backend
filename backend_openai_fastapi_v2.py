@@ -375,6 +375,8 @@ Catalogue de structuration velo :
 91. Pour une rampe, ne decoupe pas en gros blocs dans la reponse IA : donne une seule etape ramp_up/ramp_down avec la duree totale et les cibles depart/fin.
 92. Exemple : 15 min progressif de 150 a 200 W = une etape duration_sec 900, target_type watts, target_low 150, target_high 200, shape ramp_up.
 93. Exemple : 10 min retour au calme de 180 a 120 W = une etape duration_sec 600, target_type watts, target_low 120, target_high 180, shape ramp_down, intensity cooldown.
+94. Une seance ne doit jamais passer directement d'un effort intense VO2/PMA/seuil/sprint vers le cooldown : ajoute une recuperation basse de 1 a 3 min avant le retour au calme.
+95. Si le dernier bloc contient des repetitions avec recuperation entre repetitions, ajoute aussi une recuperation apres la derniere repetition avant le cooldown, sauf si le cooldown est explicitement la recuperation finale.
 
 Repères TSB :
 - TSB <= -15 : alerte fatigue forte
@@ -480,6 +482,7 @@ def normalize_workout_steps(data: Dict[str, Any], profile: ProfilePayload) -> Di
 
         normalized_steps.append(step)
 
+    normalized_steps = insert_recovery_before_cooldown(normalized_steps)
     data["workout_steps"] = normalized_steps
     total_seconds = sum(int(step.get("duration_sec") or 0) for step in normalized_steps)
     if total_seconds > 0:
@@ -495,6 +498,43 @@ def safe_float(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return number if number == number else None
+
+
+def insert_recovery_before_cooldown(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(steps) < 2:
+        return steps
+
+    result: List[Dict[str, Any]] = []
+    for index, step in enumerate(steps):
+        if step.get("intensity") == "cooldown" and result:
+            previous = result[-1]
+            if is_hard_step(previous):
+                result.append({
+                    "name": "Recuperation avant retour au calme",
+                    "duration_sec": 120,
+                    "target_type": "ftp_percent",
+                    "target_low": 40.0,
+                    "target_high": 50.0,
+                    "intensity": "recovery",
+                    "shape": "steady",
+                    "notes": "Faire redescendre avant le retour au calme."
+                })
+        result.append(step)
+    return result
+
+
+def is_hard_step(step: Dict[str, Any]) -> bool:
+    if step.get("intensity") != "active":
+        return False
+    target_type = str(step.get("target_type") or "")
+    low = safe_float(step.get("target_low")) or 0.0
+    high = safe_float(step.get("target_high")) or low
+    text = step_search_text(step)
+    if target_type == "ftp_percent" and max(low, high) >= 90:
+        return True
+    if any(word in text for word in ["vo2", "pma", "seuil", "sprint", "anaer", "anaéro"]):
+        return True
+    return False
 
 
 def step_search_text(step: Dict[str, Any]) -> str:
